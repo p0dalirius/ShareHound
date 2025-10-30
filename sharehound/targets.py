@@ -21,86 +21,88 @@ from sharehound.core.Logger import Logger
 def load_targets(options: argparse.Namespace, config: Config, logger: Logger):
     targets = []
 
-    # Loading targets from domain computers
-    if (
-        options.auth_dc_ip is not None
-        and options.auth_user is not None
-        and (options.auth_password is not None or options.auth_hashes is not None)
-    ):
-        logger.debug(
-            "[debug] Loading targets from computers in the domain '%s'"
-            % options.auth_domain
-        )
-        targets += get_computers_from_domain(
-            auth_domain=options.auth_domain,
-            auth_dc_ip=options.auth_dc_ip,
-            auth_username=options.auth_user,
-            auth_password=options.auth_password,
-            auth_hashes=options.auth_hashes,
-            auth_key=None,
-            use_ldaps=options.ldaps,
-        )
+    if options.targets_file is not None or len(options.target) != 0:
+            
+        # Loading targets line by line from a targets file
+        if options.targets_file is not None:
+            if os.path.exists(options.targets_file):
+                logger.debug(
+                    "[debug] Loading targets line by line from targets file '%s'"
+                    % options.targets_file
+                )
+                f = open(options.targets_file, "r")
+                for line in f.readlines():
+                    targets.append(line.strip())
+                f.close()
+            else:
+                print("[!] Could not open targets file '%s'" % options.targets_file)
 
-    # Loading targets from domain servers
-    if (
-        options.auth_dc_ip is not None
-        and options.auth_user is not None
-        and (options.auth_password is not None or options.auth_hashes is not None)
-    ):
-        logger.debug(
-            "[debug] Loading targets from servers in the domain '%s'"
-            % options.auth_domain
-        )
-        targets += get_servers_from_domain(
-            auth_domain=options.auth_domain,
-            auth_dc_ip=options.auth_dc_ip,
-            auth_username=options.auth_user,
-            auth_password=options.auth_password,
-            auth_hashes=options.auth_hashes,
-            auth_key=None,
-            use_ldaps=options.ldaps,
-        )
-
-    # Loading targets from subnetworks of the domain
-    if (
-        options.subnets
-        and options.auth_dc_ip is not None
-        and options.auth_user is not None
-        and (options.auth_password is not None or options.auth_hashes is not None)
-    ):
-        logger.debug(
-            "[debug] Loading targets from subnetworks of the domain '%s'"
-            % options.auth_domain
-        )
-        targets += get_subnets(
-            auth_domain=options.auth_domain,
-            auth_dc_ip=options.auth_dc_ip,
-            auth_username=options.auth_user,
-            auth_password=options.auth_password,
-            auth_hashes=options.auth_hashes,
-            auth_key=None,
-            use_ldaps=options.ldaps,
-        )
-
-    # Loading targets line by line from a targets file
-    if options.targets_file is not None:
-        if os.path.exists(options.targets_file):
+        # Loading targets from a single --target option
+        if len(options.target) != 0:
+            logger.debug("[debug] Loading targets from --target options")
+            for target in options.target:
+                targets.append(target)
+    else:
+        # Loading targets from domain computers
+        if (
+            options.auth_dc_ip is not None
+            and options.auth_user is not None
+            and (options.auth_password is not None or options.auth_hashes is not None)
+        ):
             logger.debug(
-                "[debug] Loading targets line by line from targets file '%s'"
-                % options.targets_file
+                "[debug] Loading targets from computers in the domain '%s'"
+                % options.auth_domain
             )
-            f = open(options.targets_file, "r")
-            for line in f.readlines():
-                targets.append(line.strip())
-            f.close()
-        else:
-            print("[!] Could not open targets file '%s'" % options.targets_file)
+            targets += get_computers_from_domain(
+                auth_domain=options.auth_domain,
+                auth_dc_ip=options.auth_dc_ip,
+                auth_username=options.auth_user,
+                auth_password=options.auth_password,
+                auth_hashes=options.auth_hashes,
+                auth_key=None,
+                use_ldaps=options.ldaps,
+            )
 
-    # Loading targets from a single --target option
-    if len(options.target) != 0:
-        logger.debug("[debug] Loading targets from --target options")
-        for target in options.target:
-            targets.append(target)
+        # Loading targets from domain servers
+        if (
+            options.auth_dc_ip is not None
+            and options.auth_user is not None
+            and (options.auth_password is not None or options.auth_hashes is not None)
+        ):
+            logger.debug(
+                "[debug] Loading targets from servers in the domain '%s'"
+                % options.auth_domain
+            )
+            targets += get_servers_from_domain(
+                auth_domain=options.auth_domain,
+                auth_dc_ip=options.auth_dc_ip,
+                auth_username=options.auth_user,
+                auth_password=options.auth_password,
+                auth_hashes=options.auth_hashes,
+                auth_key=None,
+                use_ldaps=options.ldaps,
+            )
+
+        # Loading targets from subnetworks of the domain
+        if (
+            options.subnets
+            and options.auth_dc_ip is not None
+            and options.auth_user is not None
+            and (options.auth_password is not None or options.auth_hashes is not None)
+        ):
+            logger.debug(
+                "[debug] Loading targets from subnetworks of the domain '%s'"
+                % options.auth_domain
+            )
+            targets += get_subnets(
+                auth_domain=options.auth_domain,
+                auth_dc_ip=options.auth_dc_ip,
+                auth_username=options.auth_user,
+                auth_password=options.auth_password,
+                auth_hashes=options.auth_hashes,
+                auth_key=None,
+                use_ldaps=options.ldaps,
+            )
 
     # Sort uniq on targets list
     targets = sorted(list(set(targets)))

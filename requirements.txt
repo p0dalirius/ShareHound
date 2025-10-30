@@ -5,3 +5,4 @@ sectools>=1.5.1
 pycryptodome>=3.23.0
 lark
 shareql
+rich
