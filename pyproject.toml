@@ -9,12 +9,14 @@ authors = [
     { name = "p0dalirius" }
 ]
 dependencies = [
+    "argcomplete",
     "impacket>=0.10.0",
     "bhopengraph>=1.1.0",
     "sectools>=1.5.1",
     "pycryptodome>=3.23.0",
     "lark",
     "shareql",
+    "rich",
 ]
 
 [project.scripts]
