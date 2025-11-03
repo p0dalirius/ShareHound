@@ -22,7 +22,7 @@ def load_targets(options: argparse.Namespace, config: Config, logger: Logger):
     targets = []
 
     if options.targets_file is not None or len(options.target) != 0:
-            
+
         # Loading targets line by line from a targets file
         if options.targets_file is not None:
             if os.path.exists(options.targets_file):
