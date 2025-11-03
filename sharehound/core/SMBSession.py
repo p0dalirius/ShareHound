@@ -651,7 +651,7 @@ class SMBSession(object):
                 return sd
         except DCERPCException as e:
             # Raise for unexpected errors.
-            self.logger.debug("NetrShareGetInfo failed: %s", e)
+            self.logger.debug(f"NetrShareGetInfo failed: {e}")
 
         # Get a DCE/RPC bound connection to the WinReg endpoint.
         dce = None

@@ -318,7 +318,7 @@ def multithreaded_share_worker(
             if options.nameserver is not None:
                 target_ip = dns_resolve(options, target[1])
                 if target_ip is None:
-                    logger.debug("Failed to resolve domain name '%s'" % target[0])
+                    logger.debug("Failed to resolve domain name '%s'" % target[1])
                     with results_lock:
                         worker_results["errors"] += 1
                         worker_results["tasks"]["total"] += 1
@@ -326,7 +326,7 @@ def multithreaded_share_worker(
                     return
 
         elif target_type == "ipv4" or target_type == "ipv6":
-            target_ip = target[0]
+            target_ip = target[1]
 
         else:
             logger.debug("Invalid target type: %s" % target_type)
