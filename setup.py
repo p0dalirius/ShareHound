@@ -14,7 +14,7 @@ with open('requirements.txt', 'r', encoding='utf-8') as f:
 
 setuptools.setup(
     name="sharehound",
-    version="1.0.1" ,
+    version="1.0.2" ,
     description="A Python script to generate a bloodhound opengraph of the rights of shares on a remote Windows machine.",
     url="https://github.com/p0dalirius/ShareHound",
     author="Podalirius",

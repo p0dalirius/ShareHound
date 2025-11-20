@@ -253,6 +253,27 @@ def parseArgs():
         help="LM:NT hashes to pass the hash for this user.",
     )
     group_targets_source.add_argument(
+        "-ak",
+        "--auth-key",
+        default=None,
+        type=str,
+        help="Kerberos key to use for authentication.",
+    )
+    group_targets_source.add_argument(
+        "-k",
+        "--use-kerberos",
+        default=False,
+        action="store_true",
+        help="Use Kerberos for authentication (default: False)",
+    )
+    group_targets_source.add_argument(
+        "-kh",
+        "--kdc-host",
+        default=None,
+        type=str,
+        help="KDC host to use for Kerberos authentication (default: None)",
+    )
+    group_targets_source.add_argument(
         "--ldaps", default=False, action="store_true", help="Use LDAPS (default: False)"
     )
     group_targets_source.add_argument(
@@ -289,7 +310,7 @@ def parseArgs():
     ):
         parser.print_help()
         print(
-            "\n[!] Option --auth-dc-ip is required when using --auth-user, --auth-password, --auth-hashes, --auth-domain"
+            "\n[!] Option --auth-dc-ip is required when using --auth-domain/--auth-user/--auth-password/--auth-hashes/--auth-key/--use-kerberos/"
         )
         sys.exit(0)
 

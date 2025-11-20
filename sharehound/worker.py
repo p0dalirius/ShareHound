@@ -43,7 +43,12 @@ class ConnectionPool:
         self._lock = Lock()
 
     def get_connection(
-        self, host: str, options: argparse.Namespace, config: Config, logger: Logger
+        self,
+        host: str,
+        remote_name: str,
+        options: argparse.Namespace,
+        config: Config,
+        logger: Logger,
     ) -> Optional[SMBSession]:
         """Get an available connection for the host, creating one if needed."""
         with self._lock:
@@ -58,16 +63,15 @@ class ConnectionPool:
                         connection.close_smb_session()
                     except Exception:
                         pass
-
             # Create new connection
             credentials = Credentials(
                 domain=options.auth_domain,
                 username=options.auth_user,
                 password=options.auth_password,
                 hashes=options.auth_hashes,
-                use_kerberos=False,
-                aesKey=None,
-                kdcHost=None,
+                use_kerberos=options.use_kerberos,
+                aesKey=options.auth_key,
+                kdcHost=options.kdc_host,
             )
 
             smb_session = SMBSession(
@@ -75,6 +79,7 @@ class ConnectionPool:
                 port=445,
                 timeout=10,
                 credentials=credentials,
+                remote_name=remote_name,
                 advertisedName=options.advertised_name,
                 config=config,
                 logger=logger,
@@ -137,6 +142,7 @@ def process_share_task(
     share_name: str,
     share_data: dict,
     host: str,
+    remote_name: str,
     options: argparse.Namespace,
     config: Config,
     graph: OpenGraph,
@@ -157,12 +163,14 @@ def process_share_task(
     """
 
     # Create a task-specific logger for this share
-    task_logger = TaskLogger(base_logger=logger, task_id=f"{host}:{share_name}")
+    task_logger = TaskLogger(base_logger=logger, task_id=f"{remote_name}:{share_name}")
 
     def _process_share():
         with host_semaphore:  # Limit concurrency per host
             # Get connection from pool
-            smb_session = connection_pool.get_connection(host, options, config, logger)
+            smb_session = connection_pool.get_connection(
+                host, remote_name, options, config, logger
+            )
             if not smb_session:
                 task_logger.debug(f"Failed to get connection for host {host}")
                 return (0, 1, 0, 0, 0, 0, 0, 0)
@@ -310,7 +318,9 @@ def multithreaded_share_worker(
 
     try:
         target_type = target[0]
-        target_ip = target[1]
+        target_value = target[1]
+        remote_name = target_value
+        target_ip = target_value
 
         logger = Logger(config=config, logfile=options.logfile)
 
@@ -351,7 +361,7 @@ def multithreaded_share_worker(
 
         # Get initial connection to discover shares
         initial_connection = connection_pool.get_connection(
-            target_ip, options, config, logger
+            target_ip, remote_name, options, config, logger
         )
         if not initial_connection:
             logger.debug("Failed to initialize SMB session")
@@ -390,6 +400,7 @@ def multithreaded_share_worker(
                     share_name,
                     share_data,
                     target_ip,
+                    remote_name,
                     options,
                     config,
                     graph,

@@ -73,6 +73,7 @@ class SMBSession(object):
     config: Config
     logger: Logger
     host: str
+    remote_name: str
     port: int
     timeout: int
     advertisedName: Optional[str]
@@ -97,6 +98,7 @@ class SMBSession(object):
         port,
         timeout,
         credentials,
+        remote_name=None,
         advertisedName=None,
         config=None,
         logger=None,
@@ -108,6 +110,7 @@ class SMBSession(object):
 
         # Target server
         self.host = host
+        self.remote_name = remote_name or host
         # Target port (by default on 445)
         self.port = port
         # Timeout (default 3 seconds)
@@ -165,7 +168,7 @@ class SMBSession(object):
             result, error = is_port_open(self.host, self.port, self.timeout)
             if result:
                 self.smbClient = SMBConnection(
-                    remoteName=self.host,
+                    remoteName=self.remote_name,
                     remoteHost=self.host,
                     myName=self.advertisedName,
                     sess_port=int(self.port),
