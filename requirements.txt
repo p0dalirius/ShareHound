@@ -1,6 +1,6 @@
 argcomplete
 impacket
-bhopengraph>=1.1.0
+bhopengraph>=1.3.0
 sectools>=1.5.1
 pycryptodome>=3.23.0
 lark

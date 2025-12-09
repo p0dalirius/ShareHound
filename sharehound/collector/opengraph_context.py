@@ -72,16 +72,16 @@ class OpenGraphContext:
         # Set base host and share nodes
         if self.host is None:
             return None
-        self.graph.add_node(self.host)
+        self.graph.add_node_without_validation(self.host)
 
         share_node, share_rights = self.share
         if share_node is None:
             return None
-        self.graph.add_node(share_node)
+        self.graph.add_node_without_validation(share_node)
         self.add_rights_to_graph(share_node.id, share_rights)
 
         # Add edge [HasNetworkShare] from host to share
-        self.graph.add_edge(
+        self.graph.add_edge_without_validation(
             Edge(
                 start_node=self.host.id,
                 end_node=share_node.id,
@@ -96,9 +96,9 @@ class OpenGraphContext:
         parent_id = share_node.id
         for directory in self.path:
             directory_node, directory_rights = directory
-            self.graph.add_node(directory_node)
+            self.graph.add_node_without_validation(directory_node)
             self.add_rights_to_graph(directory_node.id, directory_rights)
-            self.graph.add_edge(
+            self.graph.add_edge_without_validation(
                 Edge(
                     start_node=parent_id,
                     end_node=directory_node.id,
@@ -115,10 +115,10 @@ class OpenGraphContext:
         element_node, element_rights = self.element
         if element_node is None:
             return None
-        self.graph.add_node(element_node)
+        self.graph.add_node_without_validation(element_node)
         self.add_rights_to_graph(element_node.id, element_rights)
 
-        self.graph.add_edge(
+        self.graph.add_edge_without_validation(
             Edge(
                 start_node=parent_id,
                 end_node=element_node.id,
