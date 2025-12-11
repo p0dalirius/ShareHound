@@ -124,6 +124,7 @@ def parseArgs():
         help="Disable ANSI escape codes",
     )
     parser.add_argument("--logfile", default=None, help="Log file to write to")
+    parser.add_argument("--output", "-o", default=None, help="Output file to write to")
 
     # Advanced Configuration
     group_advanced = parser.add_argument_group("Advanced Configuration")
@@ -329,6 +330,10 @@ def main():
 
     logger = Logger(config=config, logfile=options.logfile)
 
+    outfile = "opengraph.json"
+    if isinstance(options.output, str):
+        outfile = options.output
+
     parsed_rules = parse_rules(options, logger)
 
     logger.info("Starting ShareHound")
@@ -391,14 +396,14 @@ def main():
         status(console, worker_results, futures)
 
     # Export the graph to a file
-    logger.info('Exporting graph to "%s"' % "opengraph.json")
+    logger.info('Exporting graph to "%s"' % outfile)
     logger.increment_indent()
     logger.info("Nodes: %d" % graph.get_node_count())
     logger.info("Edges: %d" % graph.get_edge_count())
-    graph.export_to_file("opengraph.json", include_metadata=False)
+    graph.export_to_file(outfile, include_metadata=False)
     logger.info(
         'Graph successfully exported to "%s" (%s)'
-        % ("opengraph.json", filesize(os.path.getsize("opengraph.json")))
+        % (outfile, filesize(os.path.getsize(outfile)))
     )
     logger.decrement_indent()
 
