@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import re
 import time
 from enum import Enum
@@ -52,7 +53,10 @@ class Logger(object):
         self.config = config
         self.logfile = logfile
         self.__indent_level = 0
-        #
+
+        if sys.platform != "linux":
+            self.config.no_colors = True
+
         if self.logfile is not None:
             if os.path.exists(self.logfile):
                 k = 1
