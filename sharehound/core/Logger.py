@@ -7,8 +7,8 @@
 from __future__ import annotations
 
 import os
-import sys
 import re
+import sys
 import time
 from enum import Enum
 from typing import TYPE_CHECKING
