@@ -28,11 +28,11 @@ from sharehound.utils.delta_time import delta_time
 from sharehound.utils.utils import filesize
 from sharehound.worker import worker
 
-DEFAULT_RULES = """
-DEFAULT: ALLOW
-DENY EXPLORATION IF SHARE.NAME IN ['c$','print$','admin$','ipc$']
-ALLOW EXPLORATION
-"""
+DEFAULT_RULES = [
+    "DEFAULT: ALLOW",
+    "DENY EXPLORATION IF SHARE.NAME IN ['c$','print$','admin$','ipc$']",
+    "ALLOW EXPLORATION",
+]
 
 
 def parse_rules(options: argparse.Namespace, logger: Logger) -> list[Rule]:
@@ -49,7 +49,7 @@ def parse_rules(options: argparse.Namespace, logger: Logger) -> list[Rule]:
 
     # Setup default rules
     if len(options.rules_file) == 0 and len(options.rule_string) == 0:
-        options.rule_string = DEFAULT_RULES.strip().split("\n")
+        options.rule_string = DEFAULT_RULES
 
     if len(options.rules_file) > 0:
         for rules_file in options.rules_file:
