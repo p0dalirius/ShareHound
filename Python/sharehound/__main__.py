@@ -9,7 +9,7 @@ import os
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
-from threading import Lock
+from threading import Event, Lock, Thread
 
 import argcomplete
 import ldap3.core.exceptions
@@ -166,6 +166,12 @@ def parseArgs():
         type=float,
         default=None,
         help="Maximum time in minutes to spend scanning a single host. When reached, completes current share tasks and moves on (default: no limit)",
+    )
+    group_advanced.add_argument(
+        "--snapshot-interval",
+        type=float,
+        default=None,
+        help="Write a partial OpenGraph snapshot to the output file every N minutes while collection is in progress. Useful on long-running scans to recover partial data if the process is interrupted (default: disabled).",
     )
 
     # Rules Configuration
@@ -394,21 +400,61 @@ def main():
         "directories_pending": 0,
     }
     results_lock = Lock()
-    with ThreadPoolExecutor(max_workers=options.threads) as executor:
-        futures = [
-            executor.submit(
-                worker,
-                options,
-                config,
-                graph,
-                target,
-                parsed_rules,
-                worker_results,
-                results_lock,
-            )
-            for target in targets
-        ]
-        status(console, worker_results, futures)
+
+    snapshot_stop = Event()
+    snapshot_thread = None
+    if (
+        getattr(options, "snapshot_interval", None) is not None
+        and options.snapshot_interval > 0
+    ):
+        snapshot_seconds = options.snapshot_interval * 60
+
+        def _snapshot_loop():
+            while not snapshot_stop.wait(snapshot_seconds):
+                try:
+                    if graph.export_to_file(outfile, include_metadata=False):
+                        logger.info(
+                            "Partial snapshot written to '%s' (%d nodes, %d edges)"
+                            % (
+                                outfile,
+                                graph.get_node_count(),
+                                graph.get_edge_count(),
+                            )
+                        )
+                    else:
+                        logger.debug("Partial snapshot skipped (graph not ready)")
+                except Exception as err:
+                    logger.debug(f"Partial snapshot failed: {err}")
+
+        snapshot_thread = Thread(
+            target=_snapshot_loop, name="sharehound-snapshot", daemon=True
+        )
+        snapshot_thread.start()
+        logger.info(
+            "Partial snapshots enabled: writing '%s' every %g minutes"
+            % (outfile, options.snapshot_interval)
+        )
+
+    try:
+        with ThreadPoolExecutor(max_workers=options.threads) as executor:
+            futures = [
+                executor.submit(
+                    worker,
+                    options,
+                    config,
+                    graph,
+                    target,
+                    parsed_rules,
+                    worker_results,
+                    results_lock,
+                )
+                for target in targets
+            ]
+            status(console, worker_results, futures)
+    finally:
+        snapshot_stop.set()
+        if snapshot_thread is not None:
+            snapshot_thread.join(timeout=2)
 
     # Export the graph to a file
     logger.info('Exporting graph to "%s"' % outfile)

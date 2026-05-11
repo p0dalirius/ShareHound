@@ -124,16 +124,26 @@ class StreamingOpenGraph(OpenGraph):
         Stream the graph to `filename` as BloodHound OpenGraph JSON.
 
         Reads nodes and edges one record at a time from the on-disk NDJSON
-        buffers so peak memory stays bounded.
+        buffers so peak memory stays bounded. The output is written
+        atomically via a sibling ``<filename>.tmp`` and ``os.replace`` so
+        concurrent readers (including periodic snapshots while collection
+        is in progress) never observe a truncated file.
         """
         with self._lock:
+            if self._closed:
+                return False
             self._node_file.flush()
             self._edge_file.flush()
             node_path = self._node_path
             edge_path = self._edge_path
+            # Snapshot sizes so concurrent writers past this point are
+            # excluded from this export and picked up by the next one.
+            node_limit = os.fstat(self._node_file.fileno()).st_size
+            edge_limit = os.fstat(self._edge_file.fileno()).st_size
 
+        tmp_path = filename + ".tmp"
         try:
-            with open(filename, "w", buffering=64 * 1024) as out:
+            with open(tmp_path, "w", buffering=64 * 1024) as out:
                 out.write("{\n")
 
                 if include_metadata and self.source_kind:
@@ -144,24 +154,34 @@ class StreamingOpenGraph(OpenGraph):
                 out.write('  "graph": {\n')
 
                 out.write('    "nodes": [')
-                self._stream_ndjson(out, node_path)
+                self._stream_ndjson(out, node_path, node_limit)
                 out.write("\n    ],\n")
 
                 out.write('    "edges": [')
-                self._stream_ndjson(out, edge_path)
+                self._stream_ndjson(out, edge_path, edge_limit)
                 out.write("\n    ]\n")
 
                 out.write("  }\n")
                 out.write("}\n")
+            os.replace(tmp_path, filename)
             return True
         except (IOError, OSError, TypeError):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
             return False
 
     @staticmethod
-    def _stream_ndjson(out, path: str) -> None:
+    def _stream_ndjson(out, path: str, byte_limit: Optional[int] = None) -> None:
         first = True
+        read_so_far = 0
         with open(path, "r", buffering=256 * 1024) as src:
             for line in src:
+                if byte_limit is not None:
+                    read_so_far += len(line.encode("utf-8"))
+                    if read_so_far > byte_limit:
+                        break
                 line = line.strip()
                 if not line:
                     continue
