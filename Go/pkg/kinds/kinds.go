@@ -21,7 +21,6 @@ const (
 // Principal node kinds (referenced from AD)
 const (
 	NodeKindPrincipal = "Principal"
-	NodeKindUser      = "User"
 	NodeKindGroup     = "Group"
 )
 
@@ -182,7 +181,6 @@ func AllNodeKinds() []string {
 		NodeKindFile,
 		NodeKindDirectory,
 		NodeKindPrincipal,
-		NodeKindUser,
 		NodeKindGroup,
 	}
 }

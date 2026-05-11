@@ -27,7 +27,6 @@ node_kind_directory = "Directory"
 # Rights
 
 node_kind_principal = "Principal"
-node_kind_user = "User"
 node_kind_group = "Group"
 
 # Edges kinds on Share rights
