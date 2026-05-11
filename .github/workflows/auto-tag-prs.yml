@@ -1,0 +1,148 @@
+name: Auto-tag Pull Requests
+
+on:
+  pull_request:
+    types: [opened, edited, ready_for_review]
+
+permissions:
+  pull-requests: write
+  issues: read
+
+concurrency:
+  group: auto-tag-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  tag_pr:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Detect linked issues and tag PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo  = context.repo.repo;
+            const pr    = context.payload.pull_request;
+            const prTitle = pr.title;
+            const prBody  = pr.body || '';
+
+            // ── 1. Ensure required labels exist ──────────────────────────
+            const required = [
+              { name: 'bugfix',      color: 'e11d48', description: 'Fixes a bug' },
+              { name: 'enhancement', color: 'a2eeef', description: 'New feature or request' }
+            ];
+
+            const { data: existingLabels } = await github.rest.issues.listLabelsForRepo({
+              owner, repo, per_page: 100
+            });
+            const existingNames = new Set(existingLabels.map(l => l.name));
+
+            for (const lbl of required) {
+              if (!existingNames.has(lbl.name)) {
+                await github.rest.issues.createLabel({
+                  owner, repo,
+                  name: lbl.name,
+                  color: lbl.color,
+                  description: lbl.description
+                });
+                console.log(`Created label "${lbl.name}"`);
+              }
+            }
+
+            // ── 2. Skip if already tagged ────────────────────────────────
+            if (/^\[(bugfix|enhancement)\]/i.test(prTitle)) {
+              console.log('PR already prefixed, skipping.');
+              return;
+            }
+
+            // ── 3. Find linked issue numbers from PR body ────────────────
+            // Matches: fixes #123, closes #45, resolves #678 (case-insensitive)
+            const linkPattern = /(?:fix(?:es|ed)?|close[sd]?|resolve[sd]?)\s+#(\d+)/gi;
+            const linkedIssueNumbers = [];
+            let match;
+            while ((match = linkPattern.exec(prBody)) !== null) {
+              linkedIssueNumbers.push(parseInt(match[1], 10));
+            }
+
+            // ── 4. Classify via linked issues ────────────────────────────
+            let kind = null;
+
+            if (linkedIssueNumbers.length > 0) {
+              for (const issueNum of linkedIssueNumbers) {
+                try {
+                  const { data: issue } = await github.rest.issues.get({
+                    owner, repo, issue_number: issueNum
+                  });
+                  const labels = issue.labels.map(l => l.name);
+
+                  if (labels.includes('bug')) {
+                    kind = 'bugfix';
+                    break; // bug takes priority
+                  }
+                  if (labels.includes('enhancement')) {
+                    kind = 'enhancement';
+                    // don't break — a later issue might be a bug
+                  }
+                } catch (e) {
+                  console.log(`Could not fetch issue #${issueNum}: ${e.message}`);
+                }
+              }
+            }
+
+            // ── 5. Fallback: keyword detection on PR title/body ──────────
+            if (!kind) {
+              const bugWords = [
+                'bug', 'error', 'crash', 'broken', 'fault', 'defect',
+                'regression', 'problem', 'fail', 'failed', 'failure',
+                'not working', "doesn't work", "won't work", 'exception',
+                'unexpected', 'incorrect', 'hotfix', 'bugfix', 'fix'
+              ];
+              const enhancementWords = [
+                'add', 'feature', 'improve', 'enhancement', 'request',
+                'support', 'implement', 'upgrade', 'extend', 'proposal',
+                'new', 'enhance', 'suggestion'
+              ];
+
+              function matchesKeyword(text, words) {
+                const lower = text.toLowerCase();
+                return words.some(w => {
+                  if (w.includes(' ')) return lower.includes(w);
+                  const re = new RegExp(`\\b${w}\\b`, 'i');
+                  return re.test(text);
+                });
+              }
+
+              const text = `${prTitle} ${prBody}`;
+              const isBug = matchesKeyword(text, bugWords);
+              const isEnhancement = matchesKeyword(text, enhancementWords);
+
+              if (isBug && isEnhancement) {
+                kind = matchesKeyword(prTitle, bugWords) ? 'bugfix' : 'enhancement';
+              } else if (isBug) {
+                kind = 'bugfix';
+              } else if (isEnhancement) {
+                kind = 'enhancement';
+              }
+            }
+
+            if (!kind) {
+              console.log('Could not classify PR, skipping.');
+              return;
+            }
+
+            // ── 6. Prefix title and add label ────────────────────────────
+            const prefix = `[${kind}]`;
+
+            await github.rest.pulls.update({
+              owner, repo,
+              pull_number: pr.number,
+              title: `${prefix} ${prTitle}`
+            });
+            console.log(`PR #${pr.number}: prefixed with ${prefix}`);
+
+            await github.rest.issues.addLabels({
+              owner, repo,
+              issue_number: pr.number,
+              labels: [kind]
+            });
+            console.log(`PR #${pr.number}: added label "${kind}"`);

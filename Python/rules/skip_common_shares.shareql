@@ -1,2 +1,0 @@
-DENY EXPLORATION IF SHARE.NAME IN ['c$','print$','ipc$','admin$']
-ALLOW EXPLORATION 
