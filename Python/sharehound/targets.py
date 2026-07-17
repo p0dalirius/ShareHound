@@ -12,11 +12,42 @@ from sectools.network.ip import (expand_cidr, is_ipv4_addr, is_ipv4_cidr,
                                  is_ipv6_addr)
 from sectools.windows.ldap.wrappers import (get_computers_from_domain,
                                             get_servers_from_domain,
-                                            get_subnets)
+                                            get_subnets, init_ldap_session,
+                                            parse_lm_nt_hashes)
 
 from sharehound.core.Config import Config
 from sharehound.core.Logger import Logger
 from sharehound.utils.utils import is_port_open
+
+
+def get_computer_sids_from_domain(options: argparse.Namespace):
+    lm_hash, nt_hash = parse_lm_nt_hashes(options.auth_hashes)
+    ldap_server, ldap_session = init_ldap_session(
+        auth_domain=options.auth_domain,
+        auth_dc_ip=options.auth_dc_ip,
+        auth_username=options.auth_user,
+        auth_password=options.auth_password,
+        auth_lm_hash=lm_hash,
+        auth_nt_hash=nt_hash,
+        auth_key=options.auth_key,
+        use_kerberos=options.use_kerberos,
+        kdcHost=options.kdc_host,
+        use_ldaps=options.ldaps,
+    )
+    searchbase = ldap_server.info.other["defaultNamingContext"]
+    sid_map = {}
+    for entry in ldap_session.extend.standard.paged_search(
+        searchbase, "(objectCategory=computer)", attributes=["dNSHostName", "objectSid"]
+    ):
+        if entry["type"] != "searchResEntry":
+            continue
+        dns_name = entry["attributes"]["dNSHostName"]
+        object_sid = entry["attributes"]["objectSid"]
+        if isinstance(dns_name, list):
+            dns_name = dns_name[0] if dns_name else None
+        if dns_name and object_sid:
+            sid_map[dns_name.lower()] = object_sid
+    return sid_map
 
 
 def load_targets(options: argparse.Namespace, config: Config, logger: Logger):
@@ -162,6 +193,14 @@ def load_targets(options: argparse.Namespace, config: Config, logger: Logger):
             "Skipped %d target(s) that did not parse as IPv4, IPv6, CIDR, or FQDN: %s"
             % (len(skipped_targets), ", ".join(repr(t) for t in skipped_targets))
         )
+
+    options.host_sid_map = {}
+    if (
+        options.auth_dc_ip is not None
+        and options.auth_user is not None
+        and (options.auth_password is not None or options.auth_hashes is not None)
+    ):
+        options.host_sid_map = get_computer_sids_from_domain(options)
 
     final_targets = sorted(list(set(final_targets)))
     return final_targets
