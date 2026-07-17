@@ -29,6 +29,18 @@ from sharehound.utils.delta_time import delta_time
 from sharehound.utils.utils import dns_resolve, is_port_open
 
 
+def _build_host_properties(
+    host: str, remote_name: str, target_type: str, host_sid_map: dict[str, str]
+) -> Properties:
+    properties = Properties(name=host)
+    if target_type == "fqdn":
+        properties.set_property("fqdn", remote_name)
+        machine_sid = host_sid_map.get(remote_name.lower())
+        if machine_sid:
+            properties.set_property("machineSid", machine_sid)
+    return properties
+
+
 class ConnectionPool:
     """
     Manages SMB session connections per host with connection reuse and concurrency limits.
@@ -154,6 +166,7 @@ def process_share_task(
     share_data: dict,
     host: str,
     remote_name: str,
+    target_type: str,
     options: argparse.Namespace,
     config: Config,
     graph: OpenGraph,
@@ -220,10 +233,13 @@ def process_share_task(
                 ogc = OpenGraphContext(graph=graph, logger=task_logger)
 
                 # Prepare host node
+                host_props = _build_host_properties(
+                    host, remote_name, target_type, options.host_sid_map
+                )
                 host_node = Node(
                     kinds=[kinds.node_kind_network_share_host],
                     id=host,
-                    properties=Properties(name=host),
+                    properties=host_props,
                 )
                 ogc.set_host(host_node)
 
@@ -451,6 +467,7 @@ def multithreaded_share_worker(
                     share_data,
                     target_ip,
                     remote_name,
+                    target_type,
                     options,
                     config,
                     graph,

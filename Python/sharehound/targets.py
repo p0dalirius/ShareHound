@@ -10,23 +10,54 @@ import os
 from sectools.network.domains import is_fqdn
 from sectools.network.ip import (expand_cidr, is_ipv4_addr, is_ipv4_cidr,
                                  is_ipv6_addr)
-from sectools.windows.ldap.wrappers import (get_computers_from_domain,
-                                            get_servers_from_domain,
-                                            get_subnets)
+from sectools.windows.ldap.wrappers import (get_servers_from_domain,
+                                            get_subnets, init_ldap_session,
+                                            parse_lm_nt_hashes)
 
 from sharehound.core.Config import Config
 from sharehound.core.Logger import Logger
 from sharehound.utils.utils import is_port_open
 
 
+def get_computers_with_sids_from_domain(options: argparse.Namespace):
+    lm_hash, nt_hash = parse_lm_nt_hashes(options.auth_hashes)
+    ldap_server, ldap_session = init_ldap_session(
+        auth_domain=options.auth_domain,
+        auth_dc_ip=options.auth_dc_ip,
+        auth_username=options.auth_user,
+        auth_password=options.auth_password,
+        auth_lm_hash=lm_hash,
+        auth_nt_hash=nt_hash,
+        auth_key=options.auth_key,
+        use_kerberos=options.use_kerberos,
+        kdcHost=options.kdc_host,
+        use_ldaps=options.ldaps,
+    )
+    searchbase = ldap_server.info.other["defaultNamingContext"]
+    computers = []
+    for entry in ldap_session.extend.standard.paged_search(
+        searchbase, "(objectCategory=computer)", attributes=["dNSHostName", "objectSid"]
+    ):
+        if entry["type"] != "searchResEntry":
+            continue
+        dns_name = entry["attributes"]["dNSHostName"]
+        object_sid = entry["attributes"]["objectSid"]
+        dns_names = dns_name if isinstance(dns_name, list) else [dns_name]
+        computers.extend((name, object_sid) for name in dns_names if name)
+    return computers
+
+
 def load_targets(options: argparse.Namespace, config: Config, logger: Logger):
     targets = []
-
-    if (
+    domain_computers = []
+    options.host_sid_map = {}
+    explicit_targets = options.targets_file is not None or len(options.target) != 0
+    has_ad_credentials = (
         options.auth_dc_ip is not None
         and options.auth_user is not None
         and (options.auth_password is not None or options.auth_hashes is not None)
-    ):
+    )
+    if has_ad_credentials:
         if not is_port_open(
             options.auth_dc_ip, (389 if not options.ldaps else 636), timeout=10
         ):
@@ -36,7 +67,7 @@ def load_targets(options: argparse.Namespace, config: Config, logger: Logger):
             )
             return []
 
-    if options.targets_file is not None or len(options.target) != 0:
+    if explicit_targets:
         # Loading targets line by line from a targets file
         if options.targets_file is not None:
             if os.path.exists(options.targets_file):
@@ -68,34 +99,17 @@ def load_targets(options: argparse.Namespace, config: Config, logger: Logger):
                 targets.append(target)
     else:
         # No explicit targets specified, load all computers from Active Directory
-        if (
-            options.auth_dc_ip is not None
-            and options.auth_user is not None
-            and (options.auth_password is not None or options.auth_hashes is not None)
-        ):
+        if has_ad_credentials:
             logger.info(
                 "No target list specified, fetching all computers from Active Directory domain '%s'"
                 % options.auth_domain
             )
 
-            # Loading targets from domain computers
-            logger.debug(
-                "[debug] Loading targets from computers in the domain '%s'"
-                % options.auth_domain
+            domain_computers = get_computers_with_sids_from_domain(options)
+            targets += [name for name, _ in domain_computers]
+            logger.info(
+                "Found %d computers in Active Directory" % len(domain_computers)
             )
-            computers = get_computers_from_domain(
-                auth_domain=options.auth_domain,
-                auth_dc_ip=options.auth_dc_ip,
-                auth_username=options.auth_user,
-                auth_password=options.auth_password,
-                auth_hashes=options.auth_hashes,
-                auth_key=options.auth_key,
-                use_kerberos=options.use_kerberos,
-                kdcHost=options.kdc_host,
-                use_ldaps=options.ldaps,
-            )
-            logger.info("Found %d computers in Active Directory" % len(computers))
-            targets += computers
 
             # Loading targets from domain servers
             logger.debug(
@@ -117,12 +131,7 @@ def load_targets(options: argparse.Namespace, config: Config, logger: Logger):
             targets += servers
 
         # Loading targets from subnetworks of the domain
-        if (
-            options.subnets
-            and options.auth_dc_ip is not None
-            and options.auth_user is not None
-            and (options.auth_password is not None or options.auth_hashes is not None)
-        ):
+        if options.subnets and has_ad_credentials:
             logger.debug(
                 "[debug] Loading targets from subnetworks of the domain '%s'"
                 % options.auth_domain
@@ -164,4 +173,13 @@ def load_targets(options: argparse.Namespace, config: Config, logger: Logger):
         )
 
     final_targets = sorted(list(set(final_targets)))
+
+    if explicit_targets and has_ad_credentials and any(
+        target_type == "fqdn" for target_type, _ in final_targets
+    ):
+        domain_computers = get_computers_with_sids_from_domain(options)
+
+    options.host_sid_map = {
+        name.lower(): sid for name, sid in domain_computers if sid
+    }
     return final_targets
