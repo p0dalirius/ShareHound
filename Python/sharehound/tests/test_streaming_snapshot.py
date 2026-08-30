@@ -7,6 +7,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
 
 from bhopengraph.Edge import Edge
 from bhopengraph.Node import Node
@@ -67,6 +68,17 @@ class StreamingSnapshotTests(unittest.TestCase):
             os.unlink(tmp.name)
 
     def test_snapshot_during_concurrent_writes_is_valid_json(self):
+        # An unthrottled writer outruns the exporter by roughly 4x, and each
+        # export snapshots the file size it sees on entry. Left to run flat
+        # out the writer therefore grows the next snapshot geometrically
+        # (~5x per export), so a handful of exports means minutes of work and
+        # gigabytes of temp file. Pace the writer so the on-disk buffer stays
+        # small while still being appended to throughout every export, which
+        # is the interleaving this test exists to cover.
+        WRITE_BATCH = 20
+        BATCH_PAUSE = 0.002
+        MAX_NODES = 200_000  # safety net so a wedged main thread can't run away
+
         g = StreamingOpenGraph()
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".json")
         tmp.close()
@@ -75,16 +87,18 @@ class StreamingSnapshotTests(unittest.TestCase):
 
         def writer():
             i = 0
-            while not stop.is_set():
+            while not stop.is_set() and i < MAX_NODES:
                 try:
                     g.add_node_without_validation(_mknode(f"n{i}"))
                     i += 1
+                    if i % WRITE_BATCH == 0:
+                        time.sleep(BATCH_PAUSE)
                 except Exception as e:
                     exc.append(e)
                     return
 
+        t = threading.Thread(target=writer, daemon=True)
         try:
-            t = threading.Thread(target=writer)
             t.start()
             # Let the writer get ahead.
             time.sleep(0.05)
@@ -100,9 +114,55 @@ class StreamingSnapshotTests(unittest.TestCase):
                 self.assertIn("nodes", data["graph"])
                 time.sleep(0.02)
 
+            # The writer outliving the loop is what makes every export above
+            # a genuinely concurrent one.
+            self.assertTrue(t.is_alive(), "writer stopped before the exports finished")
+
             stop.set()
-            t.join(timeout=2)
+            t.join(timeout=5)
+            self.assertFalse(t.is_alive(), "writer did not stop")
             self.assertFalse(exc, f"writer saw errors: {exc}")
+        finally:
+            stop.set()
+            t.join(timeout=5)
+            g.close()
+            os.unlink(tmp.name)
+
+    def test_export_excludes_records_appended_after_the_snapshot(self):
+        # export_to_file fstats the buffer under the lock, then streams
+        # without it. A concurrent writer keeps appending during that read,
+        # and its 256 KB buffer can auto-flush mid-record, so the bytes past
+        # the snapshot may end in a torn line. Only records wholly inside the
+        # snapshot may be emitted, or the output is not parseable JSON.
+        g = StreamingOpenGraph()
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".json")
+        tmp.close()
+
+        real_stream = StreamingOpenGraph._stream_ndjson
+
+        def append_then_stream(out, path, byte_limit=None):
+            with open(path, "a") as concurrent:
+                concurrent.write(json.dumps(_mknode("late").to_dict()) + "\n")
+                concurrent.write('{"id": "torn", "kinds"')  # flushed mid-record
+            return real_stream(out, path, byte_limit)
+
+        try:
+            for i in range(5):
+                g.add_node_without_validation(_mknode(f"n{i}"))
+
+            with patch.object(
+                StreamingOpenGraph, "_stream_ndjson",
+                staticmethod(append_then_stream),
+            ):
+                self.assertTrue(
+                    g.export_to_file(tmp.name, include_metadata=False)
+                )
+
+            with open(tmp.name) as f:
+                data = json.load(f)
+
+            ids = [n["id"] for n in data["graph"]["nodes"]]
+            self.assertEqual(ids, [f"n{i}" for i in range(5)])
         finally:
             g.close()
             os.unlink(tmp.name)
