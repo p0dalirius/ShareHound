@@ -21,20 +21,20 @@ type PathEntry struct {
 
 // OpenGraphContext maintains context while building the OpenGraph structure.
 type OpenGraphContext struct {
-	graph                *OpenGraph
-	host                 *Node
-	share                *Node
-	shareRights          ShareRights
-	shareRootNTFSRights  ShareRights        // NTFS rights for the share root directory; used as fallback for first-level files
-	path                 []PathEntry
-	element              *Node
-	elementRights        ShareRights
-	logger               logger.LoggerInterface
-	totalEdgesCreated    int
-	hostShareEmitted     bool                // true once host+share+share-rights have been added to graph
-	emittedPathNodes     map[string]struct{} // directory node IDs already committed (edges + rights)
-	domainSuffix         string              // domain FQDN used to prefix non-domain SIDs (e.g. "THIS.DOMAIN.COM")
-	effectiveAccessOnly  bool                // when true, skip granular NTFS rights edges for files/directories
+	graph               *OpenGraph
+	host                *Node
+	share               *Node
+	shareRights         ShareRights
+	shareRootNTFSRights ShareRights // NTFS rights for the share root directory; used as fallback for first-level files
+	path                []PathEntry
+	element             *Node
+	elementRights       ShareRights
+	logger              logger.LoggerInterface
+	totalEdgesCreated   int
+	hostShareEmitted    bool                // true once host+share+share-rights have been added to graph
+	emittedPathNodes    map[string]struct{} // directory node IDs already committed (edges + rights)
+	domainSuffix        string              // domain FQDN used to prefix non-domain SIDs (e.g. "THIS.DOMAIN.COM")
+	effectiveAccessOnly bool                // when true, skip granular NTFS rights edges for files/directories
 }
 
 // NewOpenGraphContext creates a new OpenGraphContext.
@@ -218,8 +218,9 @@ func (c *OpenGraphContext) AddPathToGraph() {
 		if desc, ok := kinds.EdgeDescriptions[kinds.EdgeKindHostsNetworkShare]; ok {
 			hostEdge.SetProperty("description", desc)
 		}
-		c.graph.AddEdgeWithoutValidation(hostEdge)
-		c.totalEdgesCreated++
+		if c.graph.AddEdgeWithoutValidation(hostEdge) {
+			c.totalEdgesCreated++
+		}
 
 		if c.logger != nil {
 			c.logger.Debug("[add_path_to_graph] Created edge HostsNetworkShare: Computer -> NetworkShareHost")
@@ -240,8 +241,9 @@ func (c *OpenGraphContext) AddPathToGraph() {
 		if desc, ok := kinds.EdgeDescriptions[kinds.EdgeKindHasNetworkShare]; ok {
 			shareEdge.SetProperty("description", desc)
 		}
-		c.graph.AddEdgeWithoutValidation(shareEdge)
-		c.totalEdgesCreated++
+		if c.graph.AddEdgeWithoutValidation(shareEdge) {
+			c.totalEdgesCreated++
+		}
 
 		if c.logger != nil {
 			c.logger.Debug("[add_path_to_graph] Created edge HasNetworkShare: host -> share")
@@ -270,8 +272,9 @@ func (c *OpenGraphContext) AddPathToGraph() {
 			if desc, ok := kinds.EdgeDescriptions[kinds.EdgeKindContains]; ok {
 				containsEdge.SetProperty("description", desc)
 			}
-			c.graph.AddEdgeWithoutValidation(containsEdge)
-			c.totalEdgesCreated++
+			if c.graph.AddEdgeWithoutValidation(containsEdge) {
+				c.totalEdgesCreated++
+			}
 
 			if c.logger != nil {
 				c.logger.Debug("[add_path_to_graph] Created edge Contains: " + parentID + " -> " + entry.Node.ID)
@@ -311,8 +314,9 @@ func (c *OpenGraphContext) AddPathToGraph() {
 	if desc, ok := kinds.EdgeDescriptions[kinds.EdgeKindContains]; ok {
 		elementEdge.SetProperty("description", desc)
 	}
-	c.graph.AddEdgeWithoutValidation(elementEdge)
-	c.totalEdgesCreated++
+	if c.graph.AddEdgeWithoutValidation(elementEdge) {
+		c.totalEdgesCreated++
+	}
 
 	// Track emitted directory elements so they are not re-emitted
 	// when they later appear as path entries for child files.
@@ -357,9 +361,10 @@ func (c *OpenGraphContext) AddRightsToGraph(elementID string, rights ShareRights
 			if desc, ok := kinds.EdgeDescriptions[edgeKind]; ok {
 				edge.SetProperty("description", desc)
 			}
-			c.graph.AddEdgeWithoutValidation(edge)
-			c.totalEdgesCreated++
-			edgesCreated++
+			if c.graph.AddEdgeWithoutValidation(edge) {
+				c.totalEdgesCreated++
+				edgesCreated++
+			}
 
 			if c.logger != nil {
 				c.logger.Debug("[add_rights_to_graph] Created edge: " + edgeSID + " --[" + edgeKind + "]--> " + elementID)
@@ -401,8 +406,9 @@ func (c *OpenGraphContext) AddEffectiveRightsToGraph(nodeID string, nodeRights S
 			if desc, ok := kinds.EdgeDescriptions[edgeKind]; ok {
 				edge.SetProperty("description", desc)
 			}
-			c.graph.AddEdgeWithoutValidation(edge)
-			c.totalEdgesCreated++
+			if c.graph.AddEdgeWithoutValidation(edge) {
+				c.totalEdgesCreated++
+			}
 
 			if c.logger != nil {
 				c.logger.Debug("[add_effective_rights] Created edge: " + edgeSID + " --[" + edgeKind + "]--> " + nodeID)

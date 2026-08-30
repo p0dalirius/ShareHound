@@ -1,0 +1,70 @@
+on: [pull_request, workflow_dispatch]
+jobs:
+  test_linux:
+    strategy:
+      matrix:
+        go: [1.23.3]
+    runs-on: ubuntu-22.04
+    steps:
+    - uses: actions/setup-go@v5
+      with:
+        go-version: ${{ matrix.go }}
+    - uses: actions/checkout@v4
+    - run: |
+        sudo apt update
+        sudo apt install -y samba
+        sudo groupadd smbgroup
+        sudo useradd smbuser -G smbgroup
+        (echo Smbpasswd12345; echo Smbpasswd12345) | sudo smbpasswd -a -s smbuser
+        sudo cp ./.github/smb.conf /etc/samba/smb.conf
+        sudo smbd
+    - uses: actions/cache@v4
+      with:
+        path: |
+          ~/go/pkg/mod
+          ~/.cache/go-build
+          ~/Library/Caches/go-build
+          ~\AppData\Local\go-build
+        key: ${{ runner.os }}-go-${{ matrix.go }}-${{ hashFiles('**/go.sum') }}
+        restore-keys: ${{ runner.os }}-go-${{ matrix.go }}-
+    - run: |
+        cp ./.github/client_conf.json ./
+        go test -v -race ./...
+    - uses: golangci/golangci-lint-action@v6
+      with:
+        version: v1.63.4
+        skip-cache: true
+        args: --timeout=8m
+  test_windows:
+    strategy:
+      matrix:
+        go: [1.23.3]
+    runs-on: windows-2022
+    steps:
+    - uses: actions/setup-go@v5
+      with:
+        go-version: ${{ matrix.go }}
+    - uses: actions/checkout@v4
+    - run: |
+        mkdir C:\tmp
+        net user smbuser Smbpasswd12345 /add
+        net share tmp="C:\tmp" /GRANT:smbuser,full
+        net share tmp2="C:\tmp" /GRANT:smbuser,read
+    - uses: actions/cache@v4
+      with:
+        path: |
+          ~/go/pkg/mod
+          ~/.cache/go-build
+          ~/Library/Caches/go-build
+          ~\AppData\Local\go-build
+        key: ${{ runner.os }}-go-${{ matrix.go }}-${{ hashFiles('**/go.sum') }}
+        restore-keys: ${{ runner.os }}-go-${{ matrix.go }}-
+    - run: |
+        cp ./.github/client_conf.json ./
+        go test -v -race ./...
+    - uses: golangci/golangci-lint-action@v6
+      with:
+        version: v1.63.4
+        skip-cache: true
+        args: --timeout=8m
+  

@@ -5,7 +5,9 @@ go 1.23.0
 toolchain go1.24.7
 
 require (
+	github.com/alexbrainman/sspi v0.0.0-20250919150558-7d374ff0d59e
 	github.com/go-ldap/ldap/v3 v3.4.12
+	github.com/jcmturner/gokrb5/v8 v8.4.4
 	github.com/medianexapp/go-smb2 v0.0.0-20250425112922-92edacdefca5
 	github.com/miekg/dns v1.1.57
 	github.com/spf13/cobra v1.8.0
@@ -24,7 +26,6 @@ require (
 	github.com/jcmturner/dnsutils/v2 v2.0.0 // indirect
 	github.com/jcmturner/gofork v1.7.6 // indirect
 	github.com/jcmturner/goidentity/v6 v6.0.1 // indirect
-	github.com/jcmturner/gokrb5/v8 v8.4.4 // indirect
 	github.com/jcmturner/rpc/v2 v2.0.3 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
 	golang.org/x/crypto v0.36.0 // indirect
@@ -33,3 +34,5 @@ require (
 	golang.org/x/sys v0.31.0 // indirect
 	golang.org/x/tools v0.17.0 // indirect
 )
+
+replace github.com/medianexapp/go-smb2 => ./third_party/go-smb2

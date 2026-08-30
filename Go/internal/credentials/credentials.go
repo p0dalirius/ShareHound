@@ -22,17 +22,19 @@ type Credentials struct {
 
 	// Kerberos authentication
 	UseKerberos bool
+	WindowsAuth bool
 	AESKey      string
 	KDCHost     string
 }
 
 // NewCredentials creates a new Credentials instance.
-func NewCredentials(domain, username, password string, hashes *string, useKerberos bool, aesKey, kdcHost *string) *Credentials {
+func NewCredentials(domain, username, password string, hashes *string, useKerberos, windowsAuth bool, aesKey, kdcHost *string) *Credentials {
 	c := &Credentials{
 		Domain:      domain,
 		Username:    username,
 		Password:    password,
 		UseKerberos: useKerberos,
+		WindowsAuth: windowsAuth,
 	}
 
 	if aesKey != nil {

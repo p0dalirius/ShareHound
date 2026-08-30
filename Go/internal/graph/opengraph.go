@@ -16,13 +16,14 @@ import (
 // OpenGraph represents a BloodHound OpenGraph structure.
 //
 // Nodes and edges are stored on disk in temporary NDJSON files so that
-// memory usage stays bounded regardless of graph size.  Only the set of
-// node-ID strings is kept in memory for deduplication.
+// memory usage stays bounded regardless of graph size.  Only node-ID strings
+// and edge identity keys are kept in memory for deduplication.
 type OpenGraph struct {
 	SourceKind string
 
-	// In-memory dedup – only ID strings, not full objects.
+	// In-memory dedup – only IDs/keys, not full objects.
 	nodeIDs   map[string]struct{}
+	edgeKeys  map[edgeKey]struct{}
 	edgeCount int
 
 	// Disk-backed storage (NDJSON temp files).
@@ -51,6 +52,7 @@ func NewOpenGraph(sourceKind string) (*OpenGraph, error) {
 	return &OpenGraph{
 		SourceKind: sourceKind,
 		nodeIDs:    make(map[string]struct{}),
+		edgeKeys:   make(map[edgeKey]struct{}),
 		nodeFile:   nf,
 		edgeFile:   ef,
 		nodeBuf:    bufio.NewWriterSize(nf, 256*1024),
@@ -74,7 +76,30 @@ func (g *OpenGraph) Close() error {
 		}
 	}
 	g.nodeIDs = nil
+	g.edgeKeys = nil
 	return firstErr
+}
+
+type edgeKey struct {
+	startValue   string
+	startMatchBy string
+	startKind    string
+	endValue     string
+	endMatchBy   string
+	endKind      string
+	kind         string
+}
+
+func newEdgeKey(edge *Edge) edgeKey {
+	return edgeKey{
+		startValue:   edge.Start.Value,
+		startMatchBy: edge.Start.MatchBy,
+		startKind:    edge.Start.Kind,
+		endValue:     edge.End.Value,
+		endMatchBy:   edge.End.MatchBy,
+		endKind:      edge.End.Kind,
+		kind:         edge.Kind,
+	}
 }
 
 // appendJSON marshals v as JSON and writes it as a single line to w.
@@ -108,19 +133,28 @@ func (g *OpenGraph) AddNodeWithoutValidation(node *Node) {
 	g.AddNode(node)
 }
 
-// AddEdge appends an edge to the on-disk store.
-// Callers are expected to avoid creating duplicate edges at the source
-// (see OpenGraphContext.emittedPathNodes).
-func (g *OpenGraph) AddEdge(edge *Edge) {
+// AddEdge appends an edge to the on-disk store if it has not already been
+// emitted. It returns true when the edge is written.
+func (g *OpenGraph) AddEdge(edge *Edge) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	return g.addEdgeLocked(edge)
+}
+
+func (g *OpenGraph) addEdgeLocked(edge *Edge) bool {
+	key := newEdgeKey(edge)
+	if _, exists := g.edgeKeys[key]; exists {
+		return false
+	}
+	g.edgeKeys[key] = struct{}{}
 	appendJSON(g.edgeBuf, edge)
 	g.edgeCount++
+	return true
 }
 
 // AddEdgeWithoutValidation appends an edge without additional checks.
-func (g *OpenGraph) AddEdgeWithoutValidation(edge *Edge) {
-	g.AddEdge(edge)
+func (g *OpenGraph) AddEdgeWithoutValidation(edge *Edge) bool {
+	return g.AddEdge(edge)
 }
 
 // ---------- Accessors -------------------------------------------------
@@ -453,6 +487,7 @@ func (g *OpenGraph) RestoreNodesAndEdges(nodes []*Node, edges []*Edge) {
 
 	// Reset dedup state
 	g.nodeIDs = make(map[string]struct{}, len(nodes))
+	g.edgeKeys = make(map[edgeKey]struct{}, len(edges))
 	g.edgeCount = 0
 
 	// Truncate and rewrite node file
@@ -469,8 +504,7 @@ func (g *OpenGraph) RestoreNodesAndEdges(nodes []*Node, edges []*Edge) {
 	g.edgeFile.Seek(0, io.SeekStart) //nolint:errcheck
 	g.edgeBuf.Reset(g.edgeFile)
 	for _, edge := range edges {
-		appendJSON(g.edgeBuf, edge)
-		g.edgeCount++
+		g.addEdgeLocked(edge)
 	}
 }
 

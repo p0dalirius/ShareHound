@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/medianexapp/go-smb2"
+	"github.com/specterops/sharehound/internal/auth"
 	"github.com/specterops/sharehound/internal/config"
 	"github.com/specterops/sharehound/internal/credentials"
 	"github.com/specterops/sharehound/internal/logger"
@@ -54,6 +55,9 @@ type SMBSession struct {
 	availableShares map[string]ShareInfo
 	currentShare    string
 	currentCwd      string
+	nativeWindows   bool
+	nativeConnected bool
+	nativeResource  string
 
 	// SRVSVC client for share-level security descriptors
 	srvsvcClient *SRVSVCClient
@@ -110,14 +114,15 @@ func (s *SMBSession) Connect() error {
 	}
 	s.conn = conn
 
+	initiator, authMode, err := s.newInitiator()
+	if err != nil {
+		conn.Close()
+		return fmt.Errorf("failed to initialize SMB authentication: %w", err)
+	}
+
 	// Create SMB dialer
 	dialer := &smb2.Dialer{
-		Initiator: &smb2.NTLMInitiator{
-			User:     s.credentials.Username,
-			Password: s.credentials.Password,
-			Domain:   s.credentials.Domain,
-			Hash:     s.credentials.NTRaw,
-		},
+		Initiator: initiator,
 	}
 
 	// Create context with timeout
@@ -130,16 +135,73 @@ func (s *SMBSession) Connect() error {
 		classification := ClassifyError(err)
 		s.log.Debug(fmt.Sprintf("[%s] Authentication failed: %s", classification.Category, classification.Message))
 		conn.Close()
+		s.conn = nil
+		if s.credentials.WindowsAuth && s.activateNativeWindowsFallback("SMB authentication failed") {
+			s.connected = true
+			s.log.Debug(fmt.Sprintf("[+] Using Windows-native SMB access to '%s' with current logon session", s.remoteName))
+			return nil
+		}
 		return ErrAuthFailed
 	}
 
 	s.session = session
 	s.connected = true
+	if s.credentials.WindowsAuth {
+		if err := s.enableNativeWindowsFallback(); err != nil {
+			s.log.Debug(fmt.Sprintf("Windows-native SMB fallback is unavailable for '%s': %v", s.remoteName, err))
+		}
+	}
 
-	s.log.Debug(fmt.Sprintf("[+] Successfully authenticated to '%s' as '%s\\%s'!",
-		s.host, s.credentials.Domain, s.credentials.Username))
+	s.log.Debug(fmt.Sprintf("[+] Successfully authenticated to '%s' with %s as '%s\\%s'!",
+		s.host, authMode, s.credentials.Domain, s.credentials.Username))
 
 	return nil
+}
+
+func (s *SMBSession) newInitiator() (smb2.Initiator, string, error) {
+	if s.credentials.WindowsAuth {
+		initiator, err := newSSPIKrb5Initiator(auth.ServicePrincipal("cifs", s.remoteName))
+		if err != nil {
+			return nil, "", err
+		}
+		return initiator, "Kerberos SSPI", nil
+	}
+
+	if s.credentials.UseKerberos {
+		client, err := auth.NewKerberosClient(auth.KerberosOptions{
+			Domain:     s.credentials.Domain,
+			Username:   s.credentials.Username,
+			Password:   s.credentials.Password,
+			KeytabPath: s.credentials.AESKey,
+			KDCHost:    s.credentials.KDCHost,
+		})
+		if err != nil {
+			return nil, "", err
+		}
+		return &smb2.Krb5Initiator{
+			Client:    client,
+			TargetSPN: auth.ServicePrincipal("cifs", s.remoteName),
+		}, "Kerberos", nil
+	}
+
+	return &smb2.NTLMInitiator{
+		User:     s.credentials.Username,
+		Password: s.credentials.Password,
+		Domain:   s.credentials.Domain,
+		Hash:     s.credentials.NTRaw,
+	}, "NTLM", nil
+}
+
+func (s *SMBSession) activateNativeWindowsFallback(reason string) bool {
+	if !s.canUseNativeWindowsFallback() {
+		return false
+	}
+	if err := s.enableNativeWindowsFallback(); err != nil {
+		s.log.Debug(fmt.Sprintf("Windows-native SMB fallback activation failed after %s: %v", reason, err))
+		return false
+	}
+	s.log.Debug(fmt.Sprintf("Using Windows-native SMB fallback for '%s' after %s", s.remoteName, reason))
+	return true
 }
 
 // Close closes the SMB session.
@@ -159,6 +221,7 @@ func (s *SMBSession) Close() error {
 		s.session.Logoff()
 		s.session = nil
 	}
+	s.closeNativeWindowsFallback()
 	if s.conn != nil {
 		s.conn.Close()
 		s.conn = nil
@@ -187,6 +250,7 @@ func (s *SMBSession) ForceClose() error {
 			s.srvsvcClient.Close()
 			s.srvsvcClient = nil
 		}
+		s.closeNativeWindowsFallback()
 		s.share = nil
 		s.session = nil
 		s.connected = false
@@ -218,11 +282,19 @@ func (s *SMBSession) ForceClose() error {
 func (s *SMBSession) IsConnected() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.nativeWindows {
+		return s.connected
+	}
 	return s.connected && s.session != nil
 }
 
 // Ping tests the connection.
 func (s *SMBSession) Ping() bool {
+	if s.nativeWindows {
+		_, err := s.listSharesNative()
+		return err == nil
+	}
+
 	s.mu.Lock()
 	if !s.connected || s.session == nil {
 		s.mu.Unlock()
@@ -233,11 +305,27 @@ func (s *SMBSession) Ping() bool {
 
 	// Try to list shares as a ping test
 	_, err := session.ListSharenames()
-	return err == nil
+	if err == nil {
+		return true
+	}
+	if s.activateNativeWindowsFallback("SMB ping failed") {
+		_, err = s.listSharesNative()
+		return err == nil
+	}
+	return false
 }
 
 // ListShares lists all available shares on the server.
 func (s *SMBSession) ListShares() (map[string]ShareInfo, error) {
+	if s.nativeWindows {
+		shares, err := s.listSharesNative()
+		if err != nil {
+			return nil, err
+		}
+		s.availableShares = shares
+		return s.availableShares, nil
+	}
+
 	s.mu.Lock()
 	if !s.connected || s.session == nil {
 		s.mu.Unlock()
@@ -250,6 +338,14 @@ func (s *SMBSession) ListShares() (map[string]ShareInfo, error) {
 
 	names, err := session.ListSharenames()
 	if err != nil {
+		if s.activateNativeWindowsFallback("share enumeration failed") {
+			shares, nativeErr := s.listSharesNative()
+			if nativeErr == nil {
+				s.availableShares = shares
+				return s.availableShares, nil
+			}
+			s.log.Debug(fmt.Sprintf("Windows-native share enumeration fallback failed: %v", nativeErr))
+		}
 		s.log.Debug(fmt.Sprintf("Could not list shares: %v", err))
 		return nil, err
 	}
@@ -269,6 +365,12 @@ func (s *SMBSession) ListShares() (map[string]ShareInfo, error) {
 // IMPORTANT: Does NOT hold s.mu during network operations (Mount/Umount)
 // to allow ForceClose to interrupt blocked I/O.
 func (s *SMBSession) SetShare(shareName string) error {
+	if s.nativeWindows {
+		s.currentShare = shareName
+		s.currentCwd = ""
+		return nil
+	}
+
 	s.mu.Lock()
 	if !s.connected || s.session == nil {
 		s.mu.Unlock()
@@ -287,6 +389,11 @@ func (s *SMBSession) SetShare(shareName string) error {
 	// Mount the new share WITHOUT holding mutex
 	share, err := session.Mount(shareName)
 	if err != nil {
+		if s.activateNativeWindowsFallback(fmt.Sprintf("mounting share '%s' failed", shareName)) {
+			s.currentShare = shareName
+			s.currentCwd = ""
+			return nil
+		}
 		s.log.Debug(fmt.Sprintf("Could not access share '%s': %v", shareName, err))
 		return err
 	}
@@ -324,6 +431,10 @@ func (s *SMBSession) GetCwd() string {
 
 // ListContents lists the contents of a directory.
 func (s *SMBSession) ListContents(dirPath string) (map[string]FileInfo, error) {
+	if s.nativeWindows {
+		return s.listContentsNative(dirPath)
+	}
+
 	s.mu.Lock()
 	if s.share == nil || !s.connected {
 		s.mu.Unlock()
@@ -348,6 +459,9 @@ func (s *SMBSession) ListContents(dirPath string) (map[string]FileInfo, error) {
 
 	entries, err := share.ReadDir(fullPath)
 	if err != nil {
+		if s.activateNativeWindowsFallback(fmt.Sprintf("listing contents of '%s' failed", fullPath)) {
+			return s.listContentsNative(dirPath)
+		}
 		s.log.Debug(fmt.Sprintf("Error listing contents of '%s': %v", fullPath, err))
 		return nil, err
 	}
@@ -372,6 +486,14 @@ func (s *SMBSession) ListContents(dirPath string) (map[string]FileInfo, error) {
 // GetFileSecurityDescriptor gets the NTFS security descriptor for a file or directory.
 // This uses the medianexapp/go-smb2 fork which has native SecurityInfoRaw() support.
 func (s *SMBSession) GetFileSecurityDescriptor(filePath string) (*SecurityDescriptor, error) {
+	if s.nativeWindows {
+		sdBytes, err := s.getFileSecurityDescriptorNative(filePath)
+		if err != nil || len(sdBytes) == 0 {
+			return nil, err
+		}
+		return ParseSecurityDescriptor(sdBytes)
+	}
+
 	s.mu.Lock()
 	if s.share == nil || !s.connected {
 		s.mu.Unlock()
@@ -389,6 +511,13 @@ func (s *SMBSession) GetFileSecurityDescriptor(filePath string) (*SecurityDescri
 	// Try to get security descriptor using go:linkname approach
 	sdBytes, err := QuerySecurityDescriptorLinked(share, fullPath)
 	if err != nil {
+		if s.activateNativeWindowsFallback(fmt.Sprintf("querying security descriptor for '%s' failed", fullPath)) {
+			sdBytes, nativeErr := s.getFileSecurityDescriptorNative(filePath)
+			if nativeErr == nil && len(sdBytes) != 0 {
+				return ParseSecurityDescriptor(sdBytes)
+			}
+			s.log.Debug(fmt.Sprintf("Windows-native security descriptor fallback failed for '%s': %v", fullPath, nativeErr))
+		}
 		// Log debug but don't fail - this is expected in some cases
 		s.log.Debug(fmt.Sprintf("Could not get security descriptor for '%s': %v", fullPath, err))
 		return nil, nil
@@ -406,6 +535,10 @@ func (s *SMBSession) GetFileSecurityDescriptor(filePath string) (*SecurityDescri
 // IMPORTANT: Does NOT hold s.mu during SRVSVC client creation (network I/O)
 // to allow ForceClose to interrupt blocked operations.
 func (s *SMBSession) GetShareSecurityDescriptor(shareName string) ([]byte, error) {
+	if s.nativeWindows {
+		return nil, fmt.Errorf("share-level security descriptor unavailable in Windows-native SMB fallback")
+	}
+
 	s.mu.Lock()
 	if !s.connected || s.session == nil {
 		s.mu.Unlock()
@@ -455,6 +588,10 @@ func (s *SMBSession) GetShareSecurityDescriptor(shareName string) ([]byte, error
 // It uses QuerySecurityDescriptorLinked (medianexapp/go-smb2 fork) to query the
 // root directory's security descriptor, matching the Python implementation's fallback.
 func (s *SMBSession) GetShareRootSecurityDescriptor(shareName string) ([]byte, error) {
+	if s.nativeWindows {
+		return s.getShareRootSecurityDescriptorNative(shareName)
+	}
+
 	s.mu.Lock()
 	if !s.connected || s.session == nil {
 		s.mu.Unlock()
@@ -467,6 +604,9 @@ func (s *SMBSession) GetShareRootSecurityDescriptor(shareName string) ([]byte, e
 	// the current share state used by other operations)
 	share, err := session.Mount(shareName)
 	if err != nil {
+		if s.activateNativeWindowsFallback(fmt.Sprintf("mounting share root '%s' failed", shareName)) {
+			return s.getShareRootSecurityDescriptorNative(shareName)
+		}
 		return nil, fmt.Errorf("failed to mount share '%s': %w", shareName, err)
 	}
 	defer share.Umount()
@@ -476,6 +616,9 @@ func (s *SMBSession) GetShareRootSecurityDescriptor(shareName string) ([]byte, e
 	// applied to the root path "." of the share.
 	sdBytes, err := QuerySecurityDescriptorLinked(share, ".")
 	if err != nil {
+		if s.activateNativeWindowsFallback(fmt.Sprintf("querying root security descriptor for share '%s' failed", shareName)) {
+			return s.getShareRootSecurityDescriptorNative(shareName)
+		}
 		return nil, fmt.Errorf("failed to query root security descriptor for share '%s': %w", shareName, err)
 	}
 

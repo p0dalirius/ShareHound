@@ -32,6 +32,7 @@ type Options struct {
 	AuthHashes   string
 	AuthKey      string
 	UseKerberos  bool
+	WindowsAuth  bool
 	KDCHost      string
 	UseLDAPS     bool
 	Subnets      bool
@@ -43,7 +44,7 @@ func LoadTargets(opts *Options, cfg *config.Config, log logger.LoggerInterface) 
 	var rawTargets []string
 
 	// Check if DC is reachable for LDAP queries
-	if opts.AuthDCIP != "" && opts.AuthUser != "" && (opts.AuthPassword != "" || opts.AuthHashes != "") {
+	if opts.AuthDCIP != "" && opts.hasLDAPAuth() {
 		port := 389
 		if opts.UseLDAPS {
 			port = 636
@@ -73,7 +74,7 @@ func LoadTargets(opts *Options, cfg *config.Config, log logger.LoggerInterface) 
 	}
 
 	// Load from AD if no explicit targets
-	if len(rawTargets) == 0 && opts.AuthDCIP != "" && opts.AuthUser != "" && (opts.AuthPassword != "" || opts.AuthHashes != "") {
+	if len(rawTargets) == 0 && opts.AuthDCIP != "" && opts.hasLDAPAuth() {
 		log.Info(fmt.Sprintf("No target list specified, fetching all computers from Active Directory domain '%s'", opts.AuthDomain))
 
 		adTargets, err := loadFromActiveDirectory(opts, log)
@@ -85,7 +86,7 @@ func LoadTargets(opts *Options, cfg *config.Config, log logger.LoggerInterface) 
 	}
 
 	// Load subnets if requested
-	if opts.Subnets && opts.AuthDCIP != "" && opts.AuthUser != "" && (opts.AuthPassword != "" || opts.AuthHashes != "") {
+	if opts.Subnets && opts.AuthDCIP != "" && opts.hasLDAPAuth() {
 		log.Debug(fmt.Sprintf("Loading subnets from domain '%s'", opts.AuthDomain))
 		subnets, err := loadSubnetsFromAD(opts, log)
 		if err != nil {
@@ -133,15 +134,29 @@ func LoadTargets(opts *Options, cfg *config.Config, log logger.LoggerInterface) 
 	return finalTargets, nil
 }
 
+func (opts *Options) hasLDAPAuth() bool {
+	if opts.WindowsAuth {
+		return true
+	}
+	if opts.AuthUser != "" && (opts.AuthPassword != "" || opts.AuthHashes != "" || opts.AuthKey != "" || opts.UseKerberos) {
+		return true
+	}
+	return opts.UseKerberos && os.Getenv("KRB5CCNAME") != ""
+}
+
 // loadFromActiveDirectory loads computers and servers from AD.
 func loadFromActiveDirectory(opts *Options, log logger.LoggerInterface) ([]string, error) {
 	ldapOpts := &ldap.ClientOptions{
-		Domain:   opts.AuthDomain,
-		DCIP:     opts.AuthDCIP,
-		Username: opts.AuthUser,
-		Password: opts.AuthPassword,
-		Hashes:   opts.AuthHashes,
-		UseLDAPS: opts.UseLDAPS,
+		Domain:      opts.AuthDomain,
+		DCIP:        opts.AuthDCIP,
+		Username:    opts.AuthUser,
+		Password:    opts.AuthPassword,
+		Hashes:      opts.AuthHashes,
+		AuthKey:     opts.AuthKey,
+		UseLDAPS:    opts.UseLDAPS,
+		UseKerberos: opts.UseKerberos,
+		WindowsAuth: opts.WindowsAuth,
+		KDCHost:     opts.KDCHost,
 	}
 
 	client, err := ldap.NewClient(ldapOpts)
@@ -182,12 +197,16 @@ func loadFromActiveDirectory(opts *Options, log logger.LoggerInterface) ([]strin
 // loadSubnetsFromAD loads subnet CIDRs from AD Sites and Services.
 func loadSubnetsFromAD(opts *Options, log logger.LoggerInterface) ([]string, error) {
 	ldapOpts := &ldap.ClientOptions{
-		Domain:   opts.AuthDomain,
-		DCIP:     opts.AuthDCIP,
-		Username: opts.AuthUser,
-		Password: opts.AuthPassword,
-		Hashes:   opts.AuthHashes,
-		UseLDAPS: opts.UseLDAPS,
+		Domain:      opts.AuthDomain,
+		DCIP:        opts.AuthDCIP,
+		Username:    opts.AuthUser,
+		Password:    opts.AuthPassword,
+		Hashes:      opts.AuthHashes,
+		AuthKey:     opts.AuthKey,
+		UseLDAPS:    opts.UseLDAPS,
+		UseKerberos: opts.UseKerberos,
+		WindowsAuth: opts.WindowsAuth,
+		KDCHost:     opts.KDCHost,
 	}
 
 	client, err := ldap.NewClient(ldapOpts)

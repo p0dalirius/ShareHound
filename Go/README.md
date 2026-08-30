@@ -14,7 +14,7 @@ A tool that maps network share access rights into BloodHound OpenGraph format fo
 - **ZIP compression** for large outputs (handles millions of edges)
 - ShareQL rule engine for filtering what gets explored/processed
 - Multithreaded processing with connection pooling
-- NTLM, Kerberos, and pass-the-hash authentication
+- NTLM, Kerberos, pass-the-hash, and Windows integrated authentication
 - CIDR range and target file support
 - **Resumable scans** with checkpoint support
 - **`--effective-access-only` mode** to drastically reduce graph size on large environments
@@ -78,10 +78,22 @@ Download from the [Releases](https://github.com/specterops/sharehound/releases) 
 
 # With Kerberos authentication
 ./sharehound --target dc01.corp.local \
-    --auth-domain CORP \
+    --auth-domain CORP.LOCAL \
     --auth-user administrator \
+    --auth-password 'P@ssw0rd' \
     --use-kerberos \
     --kdc-host dc01.corp.local
+
+# With an existing Kerberos credential cache
+set KRB5CCNAME=FILE:C:\Users\me\krb5cc
+./sharehound --target dc01.corp.local \
+    --auth-domain CORP.LOCAL \
+    --use-kerberos
+
+# With current Windows credentials (Windows only)
+./sharehound --target dc01.corp.local \
+    --auth-domain CORP.LOCAL \
+    --windows-auth
 
 # With custom rules
 ./sharehound --target 192.168.1.0/24 \
@@ -109,10 +121,13 @@ Download from the [Releases](https://github.com/specterops/sharehound/releases) 
 | `--auth-user` | Username of the domain account |
 | `--auth-password` | Password of the domain account |
 | `--auth-hashes` | LM:NT hashes for pass-the-hash |
-| `--auth-key` | Kerberos key for authentication |
+| `--auth-key` | Kerberos keytab path for authentication |
 | `-k, --use-kerberos` | Use Kerberos authentication |
+| `--windows-auth` | Use current Windows credentials with Kerberos SSPI authentication (Windows only) |
 | `--kdc-host` | KDC host for Kerberos authentication |
 | `--ldaps` | Use LDAPS instead of LDAP |
+
+Kerberos uses `KRB5_CONFIG` when set, otherwise ShareHound builds a minimal realm configuration from `--auth-domain` and `--kdc-host`. If `KRB5CCNAME` is set and no password or keytab is provided, the Go version uses that credential cache.
 
 ### Share Exploration
 | Flag | Description | Default |

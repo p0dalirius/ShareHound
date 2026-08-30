@@ -246,6 +246,77 @@ func TestOpenGraphOutputFormat(t *testing.T) {
 	}
 }
 
+func TestOpenGraphDeduplicatesEdges(t *testing.T) {
+	og, err := NewOpenGraph("ShareHound")
+	if err != nil {
+		t.Fatalf("Failed to create graph: %v", err)
+	}
+	defer og.Close()
+
+	edge := NewEdge("node1", "node2", "HasAccess")
+	if !og.AddEdge(edge) {
+		t.Fatal("Expected first edge add to succeed")
+	}
+	if og.AddEdge(edge) {
+		t.Fatal("Expected duplicate edge add to be skipped")
+	}
+	if og.AddEdgeWithoutValidation(NewEdge("node1", "node2", "HasAccess")) {
+		t.Fatal("Expected duplicate edge add without validation to be skipped")
+	}
+	if !og.AddEdge(NewEdge("node1", "node2", "OtherAccess")) {
+		t.Fatal("Expected distinct edge kind to be added")
+	}
+
+	if got := og.GetEdgeCount(); got != 2 {
+		t.Fatalf("Expected 2 unique edges, got %d", got)
+	}
+
+	data, err := og.ToJSON()
+	if err != nil {
+		t.Fatalf("Failed to serialize graph: %v", err)
+	}
+
+	var output map[string]interface{}
+	if err := json.Unmarshal(data, &output); err != nil {
+		t.Fatalf("Failed to parse output: %v", err)
+	}
+
+	graph := output["graph"].(map[string]interface{})
+	edges := graph["edges"].([]interface{})
+	if len(edges) != 2 {
+		t.Fatalf("Expected 2 exported edges, got %d", len(edges))
+	}
+}
+
+func TestRestoreNodesAndEdgesDeduplicatesEdges(t *testing.T) {
+	og, err := NewOpenGraph("ShareHound")
+	if err != nil {
+		t.Fatalf("Failed to create graph: %v", err)
+	}
+	defer og.Close()
+
+	nodes := []*Node{
+		NewNode("node1", "TestKind"),
+		NewNode("node2", "TestKind"),
+	}
+	edges := []*Edge{
+		NewEdge("node1", "node2", "HasAccess"),
+		NewEdge("node1", "node2", "HasAccess"),
+		NewEdge("node1", "node2", "OtherAccess"),
+	}
+
+	og.RestoreNodesAndEdges(nodes, edges)
+
+	if got := og.GetEdgeCount(); got != 2 {
+		t.Fatalf("Expected 2 unique restored edges, got %d", got)
+	}
+
+	_, restoredEdges := og.GetNodesAndEdges()
+	if len(restoredEdges) != 2 {
+		t.Fatalf("Expected 2 restored edge records, got %d", len(restoredEdges))
+	}
+}
+
 func TestExportToFileZip(t *testing.T) {
 	og, err := NewOpenGraph("ShareHound")
 	if err != nil {

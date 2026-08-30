@@ -68,6 +68,7 @@ var (
 	authHashes   string
 	authKey      string
 	useKerberos  bool
+	windowsAuth  bool
 	kdcHost      string
 	useLDAPS     bool
 	subnets      bool
@@ -124,8 +125,9 @@ creating a BloodHound-compatible OpenGraph for security analysis.`,
 	rootCmd.Flags().StringVar(&authUser, "auth-user", "", "Username of the domain account")
 	rootCmd.Flags().StringVar(&authPassword, "auth-password", "", "Password of the domain account")
 	rootCmd.Flags().StringVar(&authHashes, "auth-hashes", "", "LM:NT hashes for pass-the-hash")
-	rootCmd.Flags().StringVar(&authKey, "auth-key", "", "Kerberos key for authentication")
+	rootCmd.Flags().StringVar(&authKey, "auth-key", "", "Kerberos keytab path for authentication")
 	rootCmd.Flags().BoolVarP(&useKerberos, "use-kerberos", "k", false, "Use Kerberos authentication")
+	rootCmd.Flags().BoolVar(&windowsAuth, "windows-auth", false, "Use current Windows credentials with Kerberos SSPI authentication")
 	rootCmd.Flags().StringVar(&kdcHost, "kdc-host", "", "KDC host for Kerberos authentication")
 	rootCmd.Flags().BoolVar(&useLDAPS, "ldaps", false, "Use LDAPS instead of LDAP")
 	rootCmd.Flags().BoolVar(&subnets, "subnets", false, "Auto-enumerate all domain subnets")
@@ -148,14 +150,36 @@ func run(cmd *cobra.Command, args []string) {
 	fmt.Printf("ShareHound v%s - Original by Remi Gascou (@podalirius_) @ SpecterOps, Go port by Javier Azofra @ Siemens Healthineers\n\n", Version)
 
 	// Validate arguments
-	if targetsFile == "" && len(targetsList) == 0 && authUser == "" {
+	if targetsFile == "" && len(targetsList) == 0 && authUser == "" && !windowsAuth && !(useKerberos && os.Getenv("KRB5CCNAME") != "") {
 		fmt.Println("[!] No targets specified. Either provide targets with --target or --targets-file,")
-		fmt.Println("    or provide AD credentials (--auth-dc-ip, --auth-user, --auth-password)")
+		fmt.Println("    or provide AD credentials (--auth-dc-ip, --auth-user, --auth-password), --use-kerberos with KRB5CCNAME, or --windows-auth")
 		os.Exit(1)
 	}
 
 	if authPassword != "" && authHashes != "" {
 		fmt.Println("[!] Options --auth-password and --auth-hashes are mutually exclusive.")
+		os.Exit(1)
+	}
+
+	if windowsAuth && (authUser != "" || authPassword != "" || authHashes != "" || authKey != "") {
+		fmt.Println("[!] Option --windows-auth uses the current Windows logon session and cannot be combined with explicit credentials.")
+		os.Exit(1)
+	}
+
+	if windowsAuth {
+		useKerberos = true
+		if authDomain == "" {
+			authDomain = os.Getenv("USERDNSDOMAIN")
+		}
+	}
+
+	if targetsFile == "" && len(targetsList) == 0 && (windowsAuth || useKerberos) && authDCIP == "" {
+		fmt.Println("[!] Option --auth-dc-ip is required when loading targets from Active Directory with Kerberos or Windows auth.")
+		os.Exit(1)
+	}
+
+	if targetsFile == "" && len(targetsList) == 0 && authDomain == "" {
+		fmt.Println("[!] Option --auth-domain is required when loading targets from Active Directory.")
 		os.Exit(1)
 	}
 
@@ -255,6 +279,7 @@ func run(cmd *cobra.Command, args []string) {
 		AuthHashes:   authHashes,
 		AuthKey:      authKey,
 		UseKerberos:  useKerberos,
+		WindowsAuth:  windowsAuth,
 		KDCHost:      kdcHost,
 		UseLDAPS:     useLDAPS,
 		Subnets:      subnets,
@@ -281,6 +306,7 @@ func run(cmd *cobra.Command, args []string) {
 		authPassword,
 		&authHashes,
 		useKerberos,
+		windowsAuth,
 		&authKey,
 		&kdcHost,
 	)
